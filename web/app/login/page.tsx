@@ -12,18 +12,24 @@ export default function LoginPage() {
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
 
-  // Si ya hay sesión, no tiene sentido ver el login
   useEffect(() => {
-    if (!loading && session) router.replace("/");
+    if (!loading && session) {
+      router.replace(session.role === "ADMIN" ? "/" : "/empleado");
+    }
   }, [loading, session, router]);
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
     setError("");
     setSubmitting(true);
+
     try {
       await login(email.trim(), password);
-      router.replace("/");
+
+      const raw = localStorage.getItem("fichajes_session");
+      const next = raw ? JSON.parse(raw) : null;
+
+      router.replace(next?.role === "ADMIN" ? "/" : "/empleado");
     } catch (err) {
       setError(err instanceof Error ? err.message : "No se pudo iniciar sesión");
     } finally {
@@ -39,7 +45,7 @@ export default function LoginPage() {
       >
         <div>
           <h1 className="text-2xl font-semibold">Turnia</h1>
-          <p className="text-sm text-slate-500">Accede al panel de administración</p>
+          <p className="text-sm text-slate-500">Accede a tu cuenta</p>
         </div>
 
         <label className="block text-sm font-medium">

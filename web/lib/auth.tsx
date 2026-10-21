@@ -21,7 +21,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<Session | null>(null);
   const [loading, setLoading] = useState(true);
 
-  // Recuperamos la sesión al cargar (solo se puede leer localStorage en el cliente)
   useEffect(() => {
     try {
       const raw = localStorage.getItem(SESSION_KEY);
@@ -39,11 +38,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       method: "POST",
       body: JSON.stringify({ email, password }),
     });
-
-    // De momento el panel es solo para jefes; la pantalla de fichar de empleados llegará después
-    if (res.role !== "ADMIN") {
-      throw new Error("Este panel es solo para administradores.");
-    }
 
     const next: Session = { userId: res.userId, fullName: res.fullName, role: res.role };
     tokenStore.set(res.token);

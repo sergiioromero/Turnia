@@ -35,6 +35,29 @@ export type UserRow = {
   terminatedAt: string | null;
 };
 
+export type DayReport = {
+  date: string;
+  workedMinutes: number;
+  firstIn: string | null;
+  lastOut: string | null;
+  incomplete: boolean;
+};
+
+export type EmployeeReport = {
+  userId: number;
+  fullName: string;
+  active: boolean;
+  workedMinutes: number;
+  daysWorked: number;
+  incompleteDays: number;
+  days: DayReport[];
+};
+
+export type MonthlyReportResponse = {
+  month: string;
+  employees: EmployeeReport[];
+};
+
 export const TYPE_LABEL: Record<EntryType, string> = {
   CLOCK_IN: "Entrada",
   BREAK_START: "Inicio de pausa",

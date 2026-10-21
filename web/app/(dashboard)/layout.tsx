@@ -8,7 +8,7 @@ import { useAuth } from "@/lib/auth";
 const NAV = [
   { href: "/fichajes", label: "Fichajes" },
   { href: "/usuarios", label: "Usuarios" },
-  // Informes: lo añadiremos en el siguiente paso
+  { href: "/informes", label: "Informes" },
 ];
 
 export default function DashboardLayout({ children }: { children: ReactNode }) {
@@ -18,6 +18,7 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     if (!loading && !session) router.replace("/login");
+    if (!loading && session && session.role !== "ADMIN") router.replace("/empleado");
   }, [loading, session, router]);
 
   if (loading || !session) {
