@@ -19,3 +19,7 @@ app:
     enabled: true
   cors:
     allowed-origins: http://localhost:3000
+
+server:
+  error:
+    include-message: always
