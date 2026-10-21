@@ -17,3 +17,5 @@ app:
     expiration-hours: 8
   seed:
     enabled: true
+  cors:
+    allowed-origins: http://localhost:3000

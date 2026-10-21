@@ -1,0 +1,16 @@
+services:
+  db:
+    image: postgres:16
+    container_name: fichajes-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: fichajes
+      POSTGRES_USER: fichajes
+      POSTGRES_PASSWORD: fichajes
+    ports:
+      - "5433:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+volumes:
+  pgdata:
