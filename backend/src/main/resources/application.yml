@@ -1,0 +1,19 @@
+spring:
+  datasource:
+    url: jdbc:postgresql://localhost:5433/fichajes
+    username: fichajes
+    password: fichajes
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    open-in-view: false
+  flyway:
+    enabled: true
+
+app:
+  jwt:
+    # Mínimo 32 caracteres. En producción iría en una variable de entorno.
+    secret: ${JWT_SECRET:cambia-esto-por-un-secreto-largo-de-al-menos-32-caracteres}
+    expiration-hours: 8
+  seed:
+    enabled: true
