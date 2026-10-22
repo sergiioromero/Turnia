@@ -1,1 +1,74 @@
 @import "tailwindcss";
+
+@theme {
+  --font-sans: "Instrument Sans Variable", ui-sans-serif, system-ui, sans-serif;
+  --font-display: "Bricolage Grotesque Variable", "Instrument Sans Variable", ui-sans-serif, system-ui, sans-serif;
+
+  /* Marca y estados */
+  --color-ink: #0f2233;          /* tinta: barra lateral, botones, títulos */
+  --color-paper: #f4f6f6;        /* fondo de la aplicación */
+  --color-brand: #0e8f78;        /* trabajando / marca */
+  --color-brand-ink: #0a6b5a;    /* texto de marca sobre fondo claro */
+  --color-brand-soft: #dff3ee;
+  --color-pause: #d68a0b;        /* en pausa */
+  --color-pause-ink: #8a5700;
+  --color-pause-soft: #fbefd5;
+  --color-alert: #b93815;        /* incidencias y acciones destructivas */
+  --color-alert-soft: #fbe6df;
+
+  /* Grises con un matiz azul verdoso, para que todo el panel comparta la misma temperatura */
+  --color-slate-50: #f4f6f6;
+  --color-slate-100: #eaefef;
+  --color-slate-200: #dde3e4;
+  --color-slate-300: #c3cccf;
+  --color-slate-400: #93a0a5;
+  --color-slate-500: #66767c;
+  --color-slate-600: #4b5a60;
+  --color-slate-700: #34434a;
+  --color-slate-800: #203038;
+  --color-slate-900: #0f2233;
+  --color-slate-950: #091621;
+}
+
+@layer base {
+  html {
+    background: var(--color-paper);
+  }
+  body {
+    font-family: var(--font-sans);
+    color: var(--color-ink);
+    -webkit-font-smoothing: antialiased;
+  }
+  h1,
+  h2,
+  h3 {
+    font-family: var(--font-display);
+    letter-spacing: -0.01em;
+  }
+  :focus-visible {
+    outline: 2px solid var(--color-brand);
+    outline-offset: 2px;
+  }
+  ::selection {
+    background: var(--color-brand-soft);
+  }
+}
+
+/* Tramo de pausa: rayas ámbar, para distinguirlo del trabajo sin depender solo del color */
+.hatch-pause {
+  background-image: repeating-linear-gradient(
+    135deg,
+    var(--color-pause) 0 4px,
+    #f0c46b 4px 8px
+  );
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  ::before,
+  ::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

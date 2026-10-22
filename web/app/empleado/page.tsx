@@ -3,37 +3,23 @@
 import { useEffect, useMemo, useState } from "react";
 import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
+import { formatDateTime, todayStr } from "@/lib/dates";
+import { errorMessage } from "@/lib/errors";
 import { btnGhost, btnPrimary, errorCls } from "@/lib/ui";
+import { EntrySource, EntryType, SOURCE_LABEL, TYPE_LABEL } from "@/lib/types";
 
 type StatusResponse = {
   state: "OUT" | "WORKING" | "ON_BREAK";
-  allowedActions: string[];
+  allowedActions: EntryType[];
   lastEntryAt: string | null;
 };
 
 type EntryRow = {
   id: number;
-  type: string;
+  type: EntryType;
   occurredAt: string;
-  source: string;
+  source: EntrySource;
 };
-
-const TYPE_LABEL: Record<string, string> = {
-  CLOCK_IN: "Entrada",
-  BREAK_START: "Inicio de pausa",
-  BREAK_END: "Fin de pausa",
-  CLOCK_OUT: "Salida",
-};
-
-function formatDateTime(iso: string) {
-  return new Date(iso).toLocaleString("es-ES", {
-    day: "2-digit",
-    month: "2-digit",
-    year: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
-}
 
 function formatMinutes(totalMinutes: number) {
   const hours = Math.floor(totalMinutes / 60);
@@ -41,58 +27,30 @@ function formatMinutes(totalMinutes: number) {
   return `${hours}h ${String(minutes).padStart(2, "0")}m`;
 }
 
-function todayStr() {
-  const d = new Date();
-  const pad = (n: number) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
-}
+// La API ya devuelve solo los fichajes del día, así que aquí no se filtra por fecha.
+// Si hay un tramo abierto (trabajando ahora mismo), se suma hasta "now".
+function calculateWorkedMinutes(entries: EntryRow[], now: number) {
+  const sorted = [...entries].sort(
+    (a, b) => new Date(a.occurredAt).getTime() - new Date(b.occurredAt).getTime(),
+  );
 
-function getTodayEntries(entries: EntryRow[]) {
-  const today = todayStr();
-  return entries.filter((e) => e.occurredAt.startsWith(today));
-}
+  let start: number | null = null;
+  let totalMs = 0;
 
-function calculateWorkedMinutesToday(entries: EntryRow[]) {
-  const todayEntries = [...entries]
-    .filter((e) => e.occurredAt.startsWith(todayStr()))
-    .sort((a, b) => new Date(a.occurredAt).getTime() - new Date(b.occurredAt).getTime());
-
-  let workStart: Date | null = null;
-  let totalMinutes = 0;
-
-  for (const entry of todayEntries) {
-    const time = new Date(entry.occurredAt);
-
-    switch (entry.type) {
-      case "CLOCK_IN":
-        if (workStart === null) {
-          workStart = time;
-        }
-        break;
-
-      case "BREAK_START":
-        if (workStart) {
-          totalMinutes += Math.max(0, (time.getTime() - workStart.getTime()) / 60000);
-          workStart = null;
-        }
-        break;
-
-      case "BREAK_END":
-        if (workStart === null) {
-          workStart = time;
-        }
-        break;
-
-      case "CLOCK_OUT":
-        if (workStart) {
-          totalMinutes += Math.max(0, (time.getTime() - workStart.getTime()) / 60000);
-          workStart = null;
-        }
-        break;
+  for (const e of sorted) {
+    const t = new Date(e.occurredAt).getTime();
+    if (e.type === "CLOCK_IN" || e.type === "BREAK_END") {
+      if (start === null) start = t;
+    } else if (e.type === "BREAK_START" || e.type === "CLOCK_OUT") {
+      if (start !== null) {
+        totalMs += t - start;
+        start = null;
+      }
     }
   }
 
-  return Math.round(totalMinutes);
+  if (start !== null) totalMs += Math.max(0, now - start); // tramo en curso
+  return Math.floor(totalMs / 60000);
 }
 
 export default function EmpleadoPage() {
@@ -101,6 +59,7 @@ export default function EmpleadoPage() {
   const [entries, setEntries] = useState<EntryRow[]>([]);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [now, setNow] = useState(() => Date.now());
 
   async function load() {
     try {
@@ -114,7 +73,7 @@ export default function EmpleadoPage() {
       setEntries(historyRes);
       setError("");
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Error al cargar");
+      setError(errorMessage(e));
     }
   }
 
@@ -122,7 +81,13 @@ export default function EmpleadoPage() {
     void load();
   }, []);
 
-  async function doAction(type: string) {
+  // Refresca el contador cada 30 s para que el tramo en curso se vaya sumando
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 30000);
+    return () => clearInterval(id);
+  }, []);
+
+  async function doAction(type: EntryType) {
     setBusy(true);
     setError("");
     try {
@@ -130,21 +95,21 @@ export default function EmpleadoPage() {
         method: "POST",
         body: JSON.stringify({ type, source: "WEB" }),
       });
+      setNow(Date.now());
       await load();
     } catch (e) {
-      setError(e instanceof Error ? e.message : "No se pudo registrar");
+      setError(errorMessage(e));
     } finally {
       setBusy(false);
     }
   }
 
-  const todayEntries = useMemo(() => getTodayEntries(entries), [entries]);
-  const workedMinutes = useMemo(() => calculateWorkedMinutesToday(entries), [entries]);
+  const workedMinutes = useMemo(() => calculateWorkedMinutes(entries, now), [entries, now]);
 
   return (
     <section>
       <div className="mb-6">
-        <p className="text-sm text-slate-500">Empleado</p>
+        <p className="text-sm text-slate-500">Mi jornada</p>
         <h2 className="text-2xl font-semibold">{session?.fullName}</h2>
       </div>
 
@@ -204,7 +169,7 @@ export default function EmpleadoPage() {
           <h2 className="font-semibold">Últimos fichajes de hoy</h2>
         </div>
 
-        {todayEntries.length === 0 ? (
+        {entries.length === 0 ? (
           <p className="p-4 text-slate-500">Todavía no hay fichajes para hoy.</p>
         ) : (
           <table className="w-full text-left text-sm">
@@ -216,14 +181,14 @@ export default function EmpleadoPage() {
               </tr>
             </thead>
             <tbody>
-              {todayEntries
+              {entries
                 .slice()
                 .reverse()
                 .map((entry) => (
                   <tr key={entry.id} className="border-t border-slate-100">
                     <td className="px-4 py-3">{TYPE_LABEL[entry.type] ?? entry.type}</td>
                     <td className="px-4 py-3">{formatDateTime(entry.occurredAt)}</td>
-                    <td className="px-4 py-3">{entry.source}</td>
+                    <td className="px-4 py-3">{SOURCE_LABEL[entry.source] ?? entry.source}</td>
                   </tr>
                 ))}
             </tbody>

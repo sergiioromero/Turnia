@@ -220,7 +220,10 @@ export default function InformesPage() {
       )}
 
       <div className="mt-4">
-        <button type="button" className={btnGhost} onClick={() => setMonth(new Date().toISOString().slice(0, 7))}>
+        <button type="button" className={btnGhost} onClick={() => {
+            const n = new Date();
+            setMonth(`${n.getFullYear()}-${String(n.getMonth() + 1).padStart(2, "0")}`);
+          }}>
           Mes actual
         </button>
       </div>
