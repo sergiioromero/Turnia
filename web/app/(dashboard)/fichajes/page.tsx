@@ -1,19 +1,16 @@
 "use client";
 
-import { FormEvent, useCallback, useEffect, useState } from "react";
+import { FormEvent, useEffect, useMemo, useState } from "react";
+import { History, Pencil, Plus, Trash2 } from "lucide-react";
+import Avatar from "@/components/Avatar";
+import IconButton from "@/components/IconButton";
 import Modal from "@/components/Modal";
+import PageHeader from "@/components/PageHeader";
 import { api } from "@/lib/api";
-import { formatDateTime, toLocalInput, todayStr } from "@/lib/dates";
+import { formatDateTime, toLocalInput } from "@/lib/dates";
 import { errorMessage } from "@/lib/errors";
-import { btnGhost, btnLink, btnPrimary, errorCls, inputCls, labelCls } from "@/lib/ui";
-import {
-  AdminEntry,
-  AuditRow,
-  EntryType,
-  SOURCE_LABEL,
-  TYPE_LABEL,
-  UserRow,
-} from "@/lib/types";
+import { btnGhost, btnPrimary, errorCls, inputCls, labelCls, surfaceCls } from "@/lib/ui";
+import { AdminEntry, AuditRow, EntryType, SOURCE_LABEL, TYPE_LABEL, UserRow } from "@/lib/types";
 
 type ModalState =
   | { kind: "create" }
@@ -22,32 +19,106 @@ type ModalState =
   | { kind: "audit"; entry: AdminEntry }
   | null;
 
+type RangeKind = "today" | "yesterday" | "week" | "month";
+
 const TYPES: EntryType[] = ["CLOCK_IN", "BREAK_START", "BREAK_END", "CLOCK_OUT"];
 
+const TYPE_CHIP: Record<EntryType, string> = {
+  CLOCK_IN: "bg-brand-soft text-brand-ink",
+  BREAK_END: "bg-brand-soft text-brand-ink",
+  BREAK_START: "bg-pause-soft text-pause-ink",
+  CLOCK_OUT: "bg-slate-100 text-slate-700",
+};
+
+const REASON_SUGGESTIONS = [
+  "El empleado olvidó fichar",
+  "Error al fichar",
+  "Corrección acordada con el empleado",
+];
+
+const ROW_GRID = "md:grid-cols-[4rem_minmax(0,1.6fr)_10.5rem_8.5rem_7rem]";
+
+const pad = (n: number) => String(n).padStart(2, "0");
+const ymd = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+
+function rangeOf(kind: RangeKind): [string, string] {
+  const now = new Date();
+  const today = ymd(now);
+  switch (kind) {
+    case "today":
+      return [today, today];
+    case "yesterday": {
+      const y = new Date(now);
+      y.setDate(y.getDate() - 1);
+      return [ymd(y), ymd(y)];
+    }
+    case "week": {
+      const monday = new Date(now);
+      monday.setDate(monday.getDate() - ((monday.getDay() + 6) % 7));
+      return [ymd(monday), today];
+    }
+    case "month":
+      return [`${now.getFullYear()}-${pad(now.getMonth() + 1)}-01`, today];
+  }
+}
+
+const RANGES: { kind: RangeKind; label: string }[] = [
+  { kind: "today", label: "Hoy" },
+  { kind: "yesterday", label: "Ayer" },
+  { kind: "week", label: "Esta semana" },
+  { kind: "month", label: "Este mes" },
+];
+
+function capitalize(text: string) {
+  return text.charAt(0).toUpperCase() + text.slice(1);
+}
+
+function longDay(key: string) {
+  return capitalize(
+    new Date(`${key}T12:00:00`).toLocaleDateString("es-ES", {
+      weekday: "long",
+      day: "numeric",
+      month: "long",
+    }),
+  );
+}
+
+function shortDay(key: string) {
+  return new Date(`${key}T12:00:00`).toLocaleDateString("es-ES", { day: "numeric", month: "short" });
+}
+
+function clock(iso: string) {
+  return new Date(iso).toLocaleTimeString("es-ES", { hour: "2-digit", minute: "2-digit", hour12: false });
+}
+
 export default function FichajesPage() {
-  const [from, setFrom] = useState(todayStr());
-  const [to, setTo] = useState(todayStr());
+  const [from, setFrom] = useState(() => rangeOf("today")[0]);
+  const [to, setTo] = useState(() => rangeOf("today")[1]);
   const [userId, setUserId] = useState("");
   const [users, setUsers] = useState<UserRow[]>([]);
   const [entries, setEntries] = useState<AdminEntry[] | null>(null);
   const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
   const [modal, setModal] = useState<ModalState>(null);
-
-  const load = useCallback(async () => {
-    const params = new URLSearchParams({ from, to });
-    if (userId) params.set("userId", userId);
-    try {
-      const data = await api<AdminEntry[]>(`/api/admin/time-entries?${params}`);
-      setEntries(data);
-      setError("");
-    } catch (e) {
-      setError(errorMessage(e));
-    }
-  }, [from, to, userId]);
+  const [reloadKey, setReloadKey] = useState(0);
 
   useEffect(() => {
-    load();
-  }, [load]);
+    let alive = true;
+    const params = new URLSearchParams({ from, to });
+    if (userId) params.set("userId", userId);
+    api<AdminEntry[]>(`/api/admin/time-entries?${params}`)
+      .then((data) => {
+        if (!alive) return;
+        setEntries(data);
+        setError("");
+      })
+      .catch((e) => {
+        if (alive) setError(errorMessage(e));
+      });
+    return () => {
+      alive = false;
+    };
+  }, [from, to, userId, reloadKey]);
 
   useEffect(() => {
     api<UserRow[]>("/api/admin/users")
@@ -55,88 +126,207 @@ export default function FichajesPage() {
       .catch(() => {});
   }, []);
 
-  function closeAndReload() {
+  function afterChange(message: string) {
     setModal(null);
-    load();
+    setNotice(message);
+    setTimeout(() => setNotice(""), 4000);
+    setReloadKey((k) => k + 1);
   }
+
+  const groups = useMemo(() => {
+    const map = new Map<string, AdminEntry[]>();
+    for (const e of entries ?? []) {
+      const d = new Date(e.occurredAt);
+      const key = ymd(d);
+      const list = map.get(key) ?? [];
+      list.push(e);
+      map.set(key, list);
+    }
+    return Array.from(map, ([key, items]) => ({ key, items }));
+  }, [entries]);
+
+  const description = from === to ? longDay(from) : `Del ${shortDay(from)} al ${shortDay(to)}`;
 
   return (
     <section>
-      <div className="mb-6 flex items-center justify-between">
-        <h1 className="text-2xl font-semibold">Fichajes</h1>
-        <button className={btnPrimary} onClick={() => setModal({ kind: "create" })}>
-          Añadir fichaje
-        </button>
-      </div>
+      <PageHeader
+        title="Fichajes"
+        description={description}
+        actions={
+          <button className={btnPrimary} onClick={() => setModal({ kind: "create" })}>
+            <Plus size={16} aria-hidden="true" />
+            Añadir fichaje
+          </button>
+        }
+      />
 
-      <div className="mb-4 flex flex-wrap items-end gap-4">
-        <label className="text-sm font-medium">
+      {notice && (
+        <p role="status" className="mb-4 rounded-lg border border-brand/20 bg-brand-soft px-3 py-2 text-sm text-brand-ink">
+          {notice}
+        </p>
+      )}
+
+      <div className={`${surfaceCls} mb-5 flex flex-wrap items-end gap-x-5 gap-y-4 p-4`}>
+        <div role="group" aria-label="Rangos rápidos" className="flex gap-1 rounded-lg bg-slate-100 p-1">
+          {RANGES.map((r) => {
+            const [f, t] = rangeOf(r.kind);
+            const active = f === from && t === to;
+            return (
+              <button
+                key={r.kind}
+                type="button"
+                aria-pressed={active}
+                onClick={() => {
+                  setFrom(f);
+                  setTo(t);
+                }}
+                className={`rounded-md px-3 py-1.5 text-sm font-medium transition ${
+                  active ? "bg-white text-ink shadow-sm" : "text-slate-600 hover:text-ink"
+                }`}
+              >
+                {r.label}
+              </button>
+            );
+          })}
+        </div>
+
+        <label className="text-sm font-medium text-slate-700">
           Desde
           <input type="date" className={inputCls} value={from} max={to} onChange={(e) => setFrom(e.target.value)} />
         </label>
-        <label className="text-sm font-medium">
+        <label className="text-sm font-medium text-slate-700">
           Hasta
           <input type="date" className={inputCls} value={to} min={from} onChange={(e) => setTo(e.target.value)} />
         </label>
-        <label className="text-sm font-medium">
+        <label className="text-sm font-medium text-slate-700">
           Empleado
           <select className={inputCls} value={userId} onChange={(e) => setUserId(e.target.value)}>
             <option value="">Todos</option>
             {users.map((u) => (
               <option key={u.id} value={u.id}>
                 {u.fullName}
+                {u.active ? "" : " (de baja)"}
               </option>
             ))}
           </select>
         </label>
+
+        {entries && (
+          <p className="ml-auto text-sm text-slate-500">
+            <span className="font-semibold tabular-nums text-ink">{entries.length}</span>{" "}
+            {entries.length === 1 ? "fichaje" : "fichajes"}
+          </p>
+        )}
       </div>
 
       {error && <p className={`${errorCls} mb-4`}>{error}</p>}
-      {!entries && !error && <p className="text-slate-500">Cargando...</p>}
+
+      {!entries && !error && (
+        <div className="space-y-3" aria-label="Cargando fichajes">
+          {[0, 1, 2, 3].map((i) => (
+            <div key={i} className="h-12 animate-pulse rounded-xl bg-slate-200/60 motion-reduce:animate-none" />
+          ))}
+        </div>
+      )}
+
       {entries && entries.length === 0 && (
-        <p className="text-slate-500">No hay fichajes en este rango.</p>
+        <div className={`${surfaceCls} p-10 text-center`}>
+          <p className="font-medium">No hay fichajes en este rango.</p>
+          <p className="mt-1 text-sm text-slate-500">
+            Prueba con otro periodo, o añade uno a mano si alguien olvidó fichar.
+          </p>
+          <button className={`${btnGhost} mt-4`} onClick={() => setModal({ kind: "create" })}>
+            <Plus size={16} aria-hidden="true" />
+            Añadir fichaje
+          </button>
+        </div>
       )}
 
       {entries && entries.length > 0 && (
-        <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white">
-          <table className="w-full text-left text-sm">
-            <thead className="border-b border-slate-200 bg-slate-50 text-slate-500">
-              <tr>
-                <th className="px-4 py-3 font-medium">Fecha y hora</th>
-                <th className="px-4 py-3 font-medium">Empleado</th>
-                <th className="px-4 py-3 font-medium">Tipo</th>
-                <th className="px-4 py-3 font-medium">Origen</th>
-                <th className="px-4 py-3 font-medium">Acciones</th>
-              </tr>
-            </thead>
-            <tbody>
-              {entries.map((e) => (
-                <tr key={e.id} className="border-b border-slate-100 last:border-0">
-                  <td className="px-4 py-3 tabular-nums">{formatDateTime(e.occurredAt)}</td>
-                  <td className="px-4 py-3">{e.userName}</td>
-                  <td className="px-4 py-3">{TYPE_LABEL[e.type]}</td>
-                  <td className="px-4 py-3">{SOURCE_LABEL[e.source]}</td>
-                  <td className="space-x-3 px-4 py-3">
-                    <button className={btnLink} onClick={() => setModal({ kind: "edit", entry: e })}>
-                      Editar
-                    </button>
-                    <button className={btnLink} onClick={() => setModal({ kind: "delete", entry: e })}>
-                      Borrar
-                    </button>
-                    <button className={btnLink} onClick={() => setModal({ kind: "audit", entry: e })}>
-                      Historial
-                    </button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+        <div className={surfaceCls}>
+          <div
+            aria-hidden="true"
+            className={`hidden gap-x-4 border-b border-slate-100 px-4 py-2.5 text-xs font-medium text-slate-500 md:grid ${ROW_GRID}`}
+          >
+            <span>Hora</span>
+            <span>Empleado</span>
+            <span>Tipo</span>
+            <span>Origen</span>
+            <span className="w-28" />
+          </div>
+
+          {groups.map((g) => (
+            <div key={g.key}>
+              {groups.length > 1 && (
+                <h2 className="border-b border-t border-slate-100 bg-slate-50 px-4 py-2 font-sans text-xs font-semibold uppercase tracking-wide text-slate-500 first:border-t-0">
+                  {longDay(g.key)}
+                </h2>
+              )}
+              <ul>
+                {g.items.map((e) => (
+                  <li
+                    key={e.id}
+                    className={`grid grid-cols-[3.25rem_minmax(0,1fr)_auto] items-center gap-x-3 gap-y-1.5 md:gap-x-4 border-b border-slate-100 px-4 py-2.5 last:border-b-0 ${ROW_GRID}`}
+                  >
+                    <span className="text-sm font-medium tabular-nums">{clock(e.occurredAt)}</span>
+
+                    <div className="flex min-w-0 items-center gap-2.5">
+                      <Avatar name={e.userName} size="sm" />
+                      <span className="truncate text-sm">{e.userName}</span>
+                    </div>
+
+                    <div className="order-last col-span-3 col-start-1 flex items-center gap-3 md:contents">
+                      <span>
+                        <span
+                          className={`rounded-full px-2.5 py-0.5 text-xs font-medium ${TYPE_CHIP[e.type]}`}
+                        >
+                          {TYPE_LABEL[e.type]}
+                        </span>
+                      </span>
+                      <span>
+                        {e.source === "ADMIN" ? (
+                          <span className="rounded-full bg-pause-soft px-2.5 py-0.5 text-xs font-medium text-pause-ink">
+                            Añadido a mano
+                          </span>
+                        ) : (
+                          <span className="text-xs text-slate-500">{SOURCE_LABEL[e.source]}</span>
+                        )}
+                      </span>
+                    </div>
+
+                    <div className="flex items-center justify-end">
+                      <IconButton
+                        label="Editar fichaje"
+                        icon={Pencil}
+                        onClick={() => setModal({ kind: "edit", entry: e })}
+                      />
+                      <IconButton
+                        label="Ver historial de cambios"
+                        icon={History}
+                        onClick={() => setModal({ kind: "audit", entry: e })}
+                      />
+                      <IconButton
+                        label="Borrar fichaje"
+                        icon={Trash2}
+                        tone="danger"
+                        onClick={() => setModal({ kind: "delete", entry: e })}
+                      />
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ))}
         </div>
       )}
 
       {modal?.kind === "create" && (
         <Modal title="Añadir fichaje" onClose={() => setModal(null)}>
-          <EntryForm users={users} onDone={closeAndReload} onCancel={() => setModal(null)} />
+          <EntryForm
+            users={users}
+            onDone={() => afterChange("Fichaje añadido y registrado en el historial.")}
+            onCancel={() => setModal(null)}
+          />
         </Modal>
       )}
       {modal?.kind === "edit" && (
@@ -144,18 +334,22 @@ export default function FichajesPage() {
           <EntryForm
             users={users}
             entry={modal.entry}
-            onDone={closeAndReload}
+            onDone={() => afterChange("Fichaje modificado. El cambio queda en el historial.")}
             onCancel={() => setModal(null)}
           />
         </Modal>
       )}
       {modal?.kind === "delete" && (
         <Modal title="Borrar fichaje" onClose={() => setModal(null)}>
-          <DeleteForm entry={modal.entry} onDone={closeAndReload} onCancel={() => setModal(null)} />
+          <DeleteForm
+            entry={modal.entry}
+            onDone={() => afterChange("Fichaje borrado. Sigue visible en el historial de cambios.")}
+            onCancel={() => setModal(null)}
+          />
         </Modal>
       )}
       {modal?.kind === "audit" && (
-        <Modal title="Historial de cambios" onClose={() => setModal(null)}>
+        <Modal title="Historial de cambios" wide onClose={() => setModal(null)}>
           <AuditList entry={modal.entry} />
         </Modal>
       )}
@@ -202,10 +396,7 @@ function EntryForm({
         reason: reason.trim(),
       };
       if (entry) {
-        await api(`/api/admin/time-entries/${entry.id}`, {
-          method: "PUT",
-          body: JSON.stringify(body),
-        });
+        await api(`/api/admin/time-entries/${entry.id}`, { method: "PUT", body: JSON.stringify(body) });
       } else {
         await api("/api/admin/time-entries", {
           method: "POST",
@@ -221,11 +412,17 @@ function EntryForm({
   }
 
   return (
-    <form onSubmit={submit} className="space-y-3">
+    <form onSubmit={submit} className="space-y-4">
       {entry ? (
-        <p className="text-sm text-slate-500">
-          Empleado: <span className="font-medium text-slate-900">{entry.userName}</span>
-        </p>
+        <div className="flex items-center gap-3 rounded-lg bg-slate-50 px-3 py-2.5">
+          <Avatar name={entry.userName} />
+          <div className="text-sm">
+            <p className="font-medium">{entry.userName}</p>
+            <p className="text-slate-500">
+              Ahora: {TYPE_LABEL[entry.type]}, {formatDateTime(entry.occurredAt)}
+            </p>
+          </div>
+        </div>
       ) : (
         <label className={labelCls}>
           Empleado
@@ -242,48 +439,69 @@ function EntryForm({
         </label>
       )}
 
-      <label className={labelCls}>
-        Tipo
-        <select className={inputCls} value={type} onChange={(e) => setType(e.target.value as EntryType)}>
-          {TYPES.map((t) => (
-            <option key={t} value={t}>
-              {TYPE_LABEL[t]}
-            </option>
+      <div className="grid gap-4 sm:grid-cols-2">
+        <label className={labelCls}>
+          Tipo
+          <select className={inputCls} value={type} onChange={(e) => setType(e.target.value as EntryType)}>
+            {TYPES.map((t) => (
+              <option key={t} value={t}>
+                {TYPE_LABEL[t]}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        <label className={labelCls}>
+          Fecha y hora
+          <input
+            type="datetime-local"
+            className={inputCls}
+            required
+            value={when}
+            onChange={(e) => setWhen(e.target.value)}
+          />
+        </label>
+      </div>
+
+      <div>
+        <label htmlFor="entry-reason" className={labelCls}>
+          Motivo del cambio (obligatorio)
+        </label>
+        <div className="mt-1.5 flex flex-wrap gap-1.5">
+          {REASON_SUGGESTIONS.map((s) => (
+            <button
+              key={s}
+              type="button"
+              onClick={() => setReason(s)}
+              className="rounded-full border border-slate-300 px-2.5 py-1 text-xs text-slate-600 transition hover:border-brand hover:text-brand-ink"
+            >
+              {s}
+            </button>
           ))}
-        </select>
-      </label>
-
-      <label className={labelCls}>
-        Fecha y hora
-        <input
-          type="datetime-local"
-          className={inputCls}
-          required
-          value={when}
-          onChange={(e) => setWhen(e.target.value)}
-        />
-      </label>
-
-      <label className={labelCls}>
-        Motivo del cambio (obligatorio)
+        </div>
         <textarea
+          id="entry-reason"
           className={inputCls}
           rows={3}
           maxLength={500}
           value={reason}
           onChange={(e) => setReason(e.target.value)}
-          placeholder="Ej.: el empleado olvidó fichar al llegar"
+          placeholder="Queda guardado junto al cambio, para cualquier inspección."
         />
-      </label>
+      </div>
 
-      {error && <p role="alert" className={errorCls}>{error}</p>}
+      {error && (
+        <p role="alert" className={errorCls}>
+          {error}
+        </p>
+      )}
 
-      <div className="flex justify-end gap-2 pt-2">
+      <div className="flex justify-end gap-2 pt-1">
         <button type="button" className={btnGhost} onClick={onCancel}>
           Cancelar
         </button>
         <button type="submit" className={btnPrimary} disabled={busy}>
-          {busy ? "Guardando..." : "Guardar"}
+          {busy ? "Guardando..." : entry ? "Guardar cambios" : "Añadir fichaje"}
         </button>
       </div>
     </form>
@@ -325,34 +543,57 @@ function DeleteForm({
   }
 
   return (
-    <form onSubmit={submit} className="space-y-3">
-      <p className="text-sm">
-        Vas a borrar el fichaje de <strong>{entry.userName}</strong>:{" "}
-        {TYPE_LABEL[entry.type]} del {formatDateTime(entry.occurredAt)}. Quedará registrado en el
-        historial de cambios.
+    <form onSubmit={submit} className="space-y-4">
+      <div className="rounded-lg bg-slate-50 px-3 py-2.5 text-sm">
+        <p className="font-medium">{entry.userName}</p>
+        <p className="text-slate-500">
+          {TYPE_LABEL[entry.type]}, {formatDateTime(entry.occurredAt)}
+        </p>
+      </div>
+      <p className="text-sm text-slate-600">
+        El fichaje dejará de contar en los informes, pero queda registrado en el historial de cambios.
       </p>
 
-      <label className={labelCls}>
-        Motivo (obligatorio)
+      <div>
+        <label htmlFor="delete-reason" className={labelCls}>
+          Motivo (obligatorio)
+        </label>
+        <div className="mt-1.5 flex flex-wrap gap-1.5">
+          {["Fichaje duplicado", "Fichaje por error", "Fichaje de prueba"].map((s) => (
+            <button
+              key={s}
+              type="button"
+              onClick={() => setReason(s)}
+              className="rounded-full border border-slate-300 px-2.5 py-1 text-xs text-slate-600 transition hover:border-brand hover:text-brand-ink"
+            >
+              {s}
+            </button>
+          ))}
+        </div>
         <textarea
+          id="delete-reason"
           className={inputCls}
           rows={3}
           maxLength={500}
           value={reason}
           onChange={(e) => setReason(e.target.value)}
         />
-      </label>
+      </div>
 
-      {error && <p role="alert" className={errorCls}>{error}</p>}
+      {error && (
+        <p role="alert" className={errorCls}>
+          {error}
+        </p>
+      )}
 
-      <div className="flex justify-end gap-2 pt-2">
+      <div className="flex justify-end gap-2 pt-1">
         <button type="button" className={btnGhost} onClick={onCancel}>
           Cancelar
         </button>
         <button
           type="submit"
           disabled={busy}
-          className="rounded-lg bg-red-600 px-4 py-2 text-sm font-medium text-white hover:bg-red-700 disabled:opacity-50"
+          className="rounded-lg bg-alert px-4 py-2 text-sm font-medium text-white transition hover:bg-[#9c2e10] disabled:opacity-50"
         >
           {busy ? "Borrando..." : "Borrar fichaje"}
         </button>
@@ -361,7 +602,11 @@ function DeleteForm({
   );
 }
 
-const ACTION_LABEL = { CREATE: "Creado", UPDATE: "Modificado", DELETE: "Borrado" } as const;
+const ACTION_UI = {
+  CREATE: { label: "Creado", icon: Plus, tone: "bg-brand-soft text-brand-ink" },
+  UPDATE: { label: "Modificado", icon: Pencil, tone: "bg-pause-soft text-pause-ink" },
+  DELETE: { label: "Borrado", icon: Trash2, tone: "bg-alert-soft text-alert" },
+} as const;
 
 // El servidor guarda el estado del fichaje como JSON; lo convertimos en una frase legible.
 function describe(raw: string | null): string {
@@ -370,9 +615,7 @@ function describe(raw: string | null): string {
     let value: unknown = JSON.parse(raw);
     if (typeof value === "string") value = JSON.parse(value);
     const s = value as { type: EntryType; occurredAt: string; deleted?: boolean };
-    return `${TYPE_LABEL[s.type] ?? s.type} · ${formatDateTime(s.occurredAt)}${
-      s.deleted ? " (borrado)" : ""
-    }`;
+    return `${TYPE_LABEL[s.type] ?? s.type}, ${formatDateTime(s.occurredAt)}${s.deleted ? " (borrado)" : ""}`;
   } catch {
     return raw;
   }
@@ -388,31 +631,61 @@ function AuditList({ entry }: { entry: AdminEntry }) {
       .catch((e) => setError(errorMessage(e)));
   }, [entry.id]);
 
-  if (error) return <p className={errorCls}>{error}</p>;
-  if (!rows) return <p className="text-slate-500">Cargando...</p>;
-  if (rows.length === 0) {
-    return <p className="text-sm text-slate-500">Este fichaje no tiene cambios registrados.</p>;
-  }
-
   return (
-    <ul className="space-y-3">
-      {rows.map((r) => (
-        <li key={r.id} className="rounded-lg border border-slate-200 p-3 text-sm">
-          <p className="font-medium">
-            {ACTION_LABEL[r.action]} por {r.changedByName}
+    <div>
+      <div className="mb-4 flex items-center gap-3 rounded-lg bg-slate-50 px-3 py-2.5">
+        <Avatar name={entry.userName} />
+        <div className="text-sm">
+          <p className="font-medium">{entry.userName}</p>
+          <p className="text-slate-500">
+            {TYPE_LABEL[entry.type]}, {formatDateTime(entry.occurredAt)}
           </p>
-          <p className="text-xs text-slate-500">{formatDateTime(r.changedAt)}</p>
-          <p className="mt-2">
-            <span className="text-slate-500">Antes:</span> {describe(r.oldValue)}
-          </p>
-          <p>
-            <span className="text-slate-500">Después:</span> {describe(r.newValue)}
-          </p>
-          <p className="mt-2">
-            <span className="text-slate-500">Motivo:</span> {r.reason}
-          </p>
-        </li>
-      ))}
-    </ul>
+        </div>
+      </div>
+
+      {error && <p className={errorCls}>{error}</p>}
+      {!rows && !error && <p className="text-sm text-slate-500">Cargando...</p>}
+      {rows && rows.length === 0 && (
+        <p className="text-sm text-slate-500">
+          Este fichaje no se ha modificado: es el registro original del empleado.
+        </p>
+      )}
+
+      {rows && rows.length > 0 && (
+        <ol className="space-y-4">
+          {rows.map((r) => {
+            const ui = ACTION_UI[r.action];
+            const Icon = ui.icon;
+            return (
+              <li key={r.id} className="flex gap-3">
+                <span
+                  aria-hidden="true"
+                  className={`mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-full ${ui.tone}`}
+                >
+                  <Icon size={15} />
+                </span>
+                <div className="min-w-0 text-sm">
+                  <p className="font-medium">
+                    {ui.label} por {r.changedByName}
+                  </p>
+                  <p className="text-xs text-slate-500">{formatDateTime(r.changedAt)}</p>
+                  {r.action !== "CREATE" && (
+                    <p className="mt-2">
+                      <span className="text-slate-500">Antes:</span> {describe(r.oldValue)}
+                    </p>
+                  )}
+                  <p className={r.action === "CREATE" ? "mt-2" : ""}>
+                    <span className="text-slate-500">Después:</span> {describe(r.newValue)}
+                  </p>
+                  <p className="mt-2 rounded-lg bg-slate-50 px-3 py-2 text-slate-700">
+                    <span className="text-slate-500">Motivo:</span> {r.reason}
+                  </p>
+                </div>
+              </li>
+            );
+          })}
+        </ol>
+      )}
+    </div>
   );
 }
